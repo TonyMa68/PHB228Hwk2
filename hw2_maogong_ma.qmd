@@ -1,0 +1,368 @@
+---
+title: "PHB 228 Homework 2"
+author: "Maogong Ma"
+date: "2026-05-17"
+format: pdf
+execute:
+  freeze: true
+editor: 
+  markdown: 
+    wrap: sentence
+---
+
+# Part 1
+
+## 1.1
+
+```{r}
+library(dplyr)
+library(car)
+mtcars <- as_tibble(mtcars)
+
+# a)
+model1 <- lm(mpg ~ wt + hp, data = mtcars)
+summary(model1)
+
+# b)
+par(mfrow = c(1, 2))
+plot(model1, which = 1, main = "Residuals vs Fitted")
+plot(model1, which = 2, main = "Normal Q-Q")
+
+# c)
+vif(model1)
+
+# d)
+model2 <- lm(mpg ~ wt * hp, data = mtcars)
+anova(model1, model2)
+```
+
+1.1 a: Both wt and hp are highly significant (p < 0.001). Holding horsepower constant, expected fuel efficiency decreases by 3.88 mpg for every 1000 lbs increase in weight. Holding weight constant, expected fuel efficiency decreases by 0.032 mpg for every additional unit of horsepower.
+
+1.1 b: The residuals appear reasonably scattered around zero without strong systematic structure, supporting the homoscedasticity assumption, although a few observations show moderate deviation. The Normal Q-Q plot approximately follows the diagonal, suggesting that the residuals are reasonably close to normally distributed with slight deviations in the tails.
+
+1.1 c: car::vif() yields 1.766 for both variables, well below the standard threshold of 5 or 10, indicating no severe multicollinearity.
+
+1.1 d: The ANOVA comparison yields F = 14.088 and p < 0.001, indicating the interaction model provides a significantly better fit. The positive interaction term (wt:hp = 0.0278) implies that the negative impact of horsepower on fuel efficiency is attenuated for heavier vehicles. Model 2 is preferred.
+
+## 1.2
+
+```{r}
+library(MASS)
+data(biopsy, package = "MASS")
+biopsy <- na.omit(biopsy)
+biopsy$class <- factor(biopsy$class, levels = c("benign", "malignant"))
+
+# a)
+boxplot(V1 ~ class, data = biopsy, 
+        ylab = "Cell Thickness (V1)", xlab = "Tumor Class",
+        main = "Cell Thickness by Tumor Classification")
+
+# b)
+logit_model <- glm(class ~ V1 + V2 + V3, data = biopsy, family = binomial())
+summary(logit_model)
+exp(coef(logit_model))
+
+# c)
+biopsy_pred <- biopsy %>%
+  mutate(pred_prob = predict(logit_model, type = 'response'),
+         pred_class = factor(ifelse(pred_prob > 0.5, 'malignant', 'benign'),
+                             levels = c('benign', 'malignant')))
+
+confusion_mat <- table(Observed = biopsy_pred$class, Predicted = biopsy_pred$pred_class)
+print(confusion_mat)
+
+accuracy <- sum(diag(confusion_mat)) / sum(confusion_mat)
+sensitivity <- confusion_mat['malignant', 'malignant'] / sum(confusion_mat['malignant', ])
+specificity <- confusion_mat['benign', 'benign'] / sum(confusion_mat['benign', ])
+
+# d)
+new_prob <- predict(logit_model, newdata = data.frame(V1 = 5, V2 = 4, V3 = 4), type = 'response')
+```
+
+### 1.2 a
+
+The boxplot reveals that malignant tumors have a substantially higher median cell thickness (V1) than benign ones. The lack of interquartile overlap suggests V1 is a strong discriminator.
+
+### 1.2 b
+All three predictors are highly significant. The odds ratios are approximately 1.81 for V1, 1.89 for V2, and 2.06 for V3, meaning each unit increase multiplies the odds of malignancy by the respective ratio.
+
+### 1.2 c
+The model achieves an accuracy of 0.950, a sensitivity of 0.916, and a specificity of 0.968.
+
+### 1.2 d
+The predicted probability of malignancy for a new observation with (V1=5, V2=4, V3=4) is approximately 0.666.
+
+# Part 2
+
+```{r}
+library(lme4)
+library(ggplot2)
+
+# a) 
+set.seed(123)
+n_participants <- 20
+n_items <- 15
+n_conditions <- 2
+
+
+rt_data <- expand.grid(
+  participant = factor(1:n_participants),
+  item = factor(1:n_items),
+  condition = factor(c("control", "treatment"))
+)
+
+subject_intercept <- rnorm(n_participants, mean = 0, sd = 50)
+item_intercept <- rnorm(n_items, mean = 0, sd = 20)
+
+rt_data$reaction_time <- 500 + 
+  ifelse(rt_data$condition == "treatment", -30, 0) +
+  subject_intercept[rt_data$participant] +
+  item_intercept[rt_data$item] +
+  rnorm(nrow(rt_data), mean = 0, sd = 30)
+
+# b)
+fixed_model <- lm(reaction_time ~ condition, data = rt_data)
+
+randint_participant <- lmer(reaction_time ~ condition + (1 | participant), data = rt_data, REML = FALSE)
+
+randint_both <- lmer(reaction_time ~ condition + (1 | participant) + (1 | item), data = rt_data, REML = FALSE)
+
+aic_vals <- c(AIC(fixed_model), AIC(randint_participant), AIC(randint_both))
+names(aic_vals) <- c('fixed', 'participant', 'participant_item')
+print(aic_vals)
+
+# c)
+print(summary(randint_both)$coefficients)
+variance_components <- as.data.frame(VarCorr(randint_both))
+participant_var <- variance_components$vcov[variance_components$grp == 'participant']
+item_var <- variance_components$vcov[variance_components$grp == 'item']
+residual_var <- sigma(randint_both)^2
+
+icc_participant <- participant_var / (participant_var + item_var + residual_var)
+cat("Participant-level ICC:", icc_participant, "\n")
+
+
+# d)
+rand_slope <- lmer(
+  reaction_time ~ condition + (condition | participant) + (1 | item), 
+  data = rt_data, 
+  REML = FALSE
+)
+print(anova(randint_both, rand_slope))
+
+# e)
+ggplot(rt_data, aes(x = condition, y = reaction_time, group = participant, color = participant)) +
+  geom_point(size = 1.5, alpha = 0.8) +
+  geom_line(alpha = 0.6) +
+  labs(
+    title = 'Reaction Time by Participant and Condition',
+    x = 'Condition', 
+    y = 'Reaction Time (ms)'
+  ) +
+  theme_minimal() + 
+  theme(legend.position = 'none')
+```
+
+### 2 b
+
+The random-intercept model for both participants and items yields the lowest AIC (5903.88) and is therefore preferred.
+
+### 2 c
+
+The fixed effect estimate for treatment is approximately -32.11, indicating treatment reduces average reaction time by about 32 ms. The participant-level ICC is 0.6497. This indicates that roughly 65% of the total variance in reaction time is attributable to between-participant baseline differences.
+
+### 2 d
+
+The random-slope model does not provide a statistically significant improvement over the random-intercept model (p = 0.4203).
+
+# Part 3
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(palmerpenguins)
+
+penguins_clean <- penguins %>%
+  filter(!is.na(bill_length_mm), !is.na(flipper_length_mm),
+         !is.na(body_mass_g), !is.na(sex),
+         !is.na(species), !is.na(island))
+
+theme_penguin <- function() {
+  theme_classic() +
+    theme(
+      text = element_text(size = 12, family = "sans"),
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 11, color = "#555555"),
+      axis.title = element_text(face = "bold"),
+      panel.grid.major = element_line(color = "#dddddd", linewidth = 0.3),
+      panel.grid.minor = element_blank(),
+      legend.position = "top",
+      legend.background = element_rect(fill = "transparent"),
+      legend.key = element_rect(fill = "transparent", color = NA)
+    )
+}
+p1 <- ggplot(penguins_clean, aes(x = bill_length_mm, y = flipper_length_mm, color = sex)) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(method = "lm", formula = y ~ x, se = TRUE, color = "black", linetype = "solid") +
+  facet_wrap(~ species) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(title = "Bill Length vs Flipper Length by Species",
+       x = "Bill Length (mm)", y = "Flipper Length (mm)", color = "Sex") +
+  theme_penguin()
+
+p1
+
+p2 <- ggplot(penguins_clean, aes(x = species, y = body_mass_g, fill = sex)) +
+  geom_violin(position = position_dodge(width = 0.9), alpha = 0.7) +
+  geom_boxplot(position = position_dodge(width = 0.9), width = 0.2, outlier.shape = NA) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)), limits = c(0, NA)) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Body Mass by Species and Sex",
+       x = "Species", y = "Body Mass (g)", fill = "Sex") +
+  theme_penguin()
+
+p2
+
+p3 <- ggplot(penguins_clean, aes(x = bill_depth_mm, y = body_mass_g, color = species)) +
+  geom_point(aes(shape = sex), size = 2.5, alpha = 0.8) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, linetype = "dashed") +
+  facet_wrap(~ island) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(title = "Body Mass vs Bill Depth by Species and Island",
+       x = "Bill Depth (mm)", y = "Body Mass (g)", 
+       color = "Species", shape = "Sex") +
+  theme_penguin()
+
+p3
+```
+
+The faceted scatter plot reveals positive relationships between bill depth and body mass within several penguin groups. Gentoo penguins generally exhibit larger body mass values than Adelie and Chinstrap penguins, while males tend to be heavier than females across species. Differences across islands also suggest potential environmental or ecological influences on penguin morphology. Overall, the visualization demonstrates that relationships between body mass and bill characteristics vary across biological subgroups, and aggregated patterns may obscure subgroup-specific trends.
+
+# Part 4
+
+```{r}
+library(shiny)
+library(ggplot2)
+library(dplyr)
+
+ui <- fluidPage(
+  titlePanel('mtcars MPG Explorer'),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput('predictor', 'Predictor variable', choices = c('wt', 'hp', 'disp', 'drat')),
+      sliderInput('cyl_filter', 'Cylinder range', min = min(mtcars$cyl), max = max(mtcars$cyl), value = c(4, 8), step = 2),
+      checkboxInput('show_line', 'Show regression line', value = TRUE)
+    ),
+    mainPanel(
+      plotOutput('scatterPlot'),
+      verbatimTextOutput('modelSummary')
+    )
+  )
+)
+
+server <- function(input, output) {
+  
+  filtered_data <- reactive({
+    mtcars %>% filter(cyl >= input$cyl_filter[1], cyl <= input$cyl_filter[2])
+  })
+  
+  fitted_model <- reactive({
+    lm(as.formula(paste('mpg ~', input$predictor)), data = filtered_data())
+  })
+  
+  output$scatterPlot <- renderPlot({
+    p <- ggplot(filtered_data(), aes(x = .data[[input$predictor]], y = mpg)) +
+      geom_point(color = '#2c3e50', size = 2) +
+      labs(title = paste('mpg vs', input$predictor), x = input$predictor, y = 'mpg') +
+      theme_minimal()
+    
+    if (input$show_line) {
+      p <- p + geom_smooth(method = 'lm', se = FALSE, color = '#e74c3c')
+    }
+    p
+  })
+  
+  output$modelSummary <- renderPrint({
+    summary(fitted_model())
+  })
+}
+
+shinyApp(ui = ui, server = server)
+
+```
+
+The app includes a cylinder filter and a toggle for the regression line. This allows users to conduct conditional analysis by isolating hardware architectures, mitigating confounding while maintaining control over the visual overlay.
+
+# Part 5
+
+```{r}
+library(parallel)
+library(microbenchmark)
+
+physical_cores <- detectCores(logical = FALSE)
+logical_cores <- detectCores(logical = TRUE)
+
+safe_cores <- max(1, logical_cores - 1)
+
+slow_mean <- function(x) {
+  Sys.sleep(0.01)
+  mean(x)
+}
+
+test_list <- replicate(100, rnorm(100), simplify = FALSE)
+
+bench_res <- microbenchmark(
+  sequential = lapply(test_list, slow_mean),
+  parallel = mclapply(test_list, slow_mean, mc.cores = safe_cores),
+  times = 5
+)
+print(bench_res)
+
+bootstrap_ci_sequential <- function(data, n_bootstrap = 1000, confidence = 0.95) {
+  n <- length(data)
+  boot_means <- numeric(n_bootstrap)
+  for (i in seq_len(n_bootstrap)) {
+    boot_means[i] <- mean(sample(data, n, replace = TRUE))
+  }
+  alpha <- 1 - confidence
+  c(lower = quantile(boot_means, alpha / 2), upper = quantile(boot_means, 1 - alpha / 2))
+}
+
+bootstrap_ci_parallel <- function(data, n_bootstrap = 1000, confidence = 0.95) {
+  n <- length(data)
+  boot_means <- unlist(mclapply(seq_len(n_bootstrap), function(i) {
+    mean(sample(data, n, replace = TRUE))
+  }, mc.cores = safe_cores))
+  alpha <- 1 - confidence
+  c(lower = quantile(boot_means, alpha / 2), upper = quantile(boot_means, 1 - alpha / 2))
+}
+
+sizes <- c(500, 1000, 2000)
+
+timing_results <- data.frame()
+
+for (s in sizes) {
+
+  seq_time <- system.time(
+    bootstrap_ci_sequential(mtcars$mpg, n_bootstrap = s)
+  )["elapsed"]
+
+  par_time <- system.time(
+    bootstrap_ci_parallel(mtcars$mpg, n_bootstrap = s)
+  )["elapsed"]
+
+  timing_results <- rbind(
+    timing_results,
+    data.frame(
+      bootstrap_size = s,
+      sequential = seq_time,
+      parallel = par_time
+    )
+  )
+}
+
+print(timing_results)
+
+```
+
+For relatively small bootstrap problems, parallel execution may not always outperform sequential execution because process management overhead can dominate the computational savings. However, as the number of bootstrap iterations increases, the relative efficiency of parallel processing generally improves. On Windows systems, mclapply has limited multicore support because forked processes are unavailable.
